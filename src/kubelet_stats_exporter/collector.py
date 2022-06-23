@@ -26,9 +26,13 @@ class KubeletCollector():
         self.futures = []
 
         # Prometheus metrics to collect
-        self.metric = GaugeMetricFamily(
+        self.ephemeral_storage_metric = GaugeMetricFamily(
             'kube_pod_ephemeral_storage_used_bytes',
             'Kubernetes Pod ephemeral storage used in bytes',
+            labels=['node','namespace','pod'])
+        self.cpu_usage_metric = GaugeMetricFamily(
+            'kube_pod_cpu_usage_nanocores',
+            'Kubernetes Pod cpu usage in nanocores',
             labels=['node','namespace','pod'])
 
     def collect(self):
@@ -50,7 +54,8 @@ class KubeletCollector():
             future.result()
 
         logger.debug(f"Save metric content.")
-        yield self.metric
+        yield self.ephemeral_storage_metric
+        yield self.cpu_usage_metric
 
     def get_node_info(self, node_name):
         """Retrieves node information
@@ -92,6 +97,8 @@ class KubeletCollector():
             Pod namespace
         used_bytes: int
             Ephemeral Storage - Used bytes metric value
+        usage_nano_cores: long int
+            CPU - CPU used nanocores
         """
         logger.debug(f"Parsing info from pod: {pod_id}")
         name = pod_id['podRef']['name']
@@ -101,7 +108,14 @@ class KubeletCollector():
         except Exception as err:
             used_bytes = 0
             logger.warning(f"Unable to get usedBytes metrics for pod {name}, setting to 0 - {str(err)}")
-        return name, namespace, used_bytes
+
+        try:
+            usage_nano_cores = pod_id['cpu']['usageNanoCores']
+        except Exception as err:
+            usage_nano_cores = 0
+            logger.warning(f"Unable to get usageNanoCores metrics for pod {name}, setting to 0 - {str(err)}")
+
+        return name, namespace, used_bytes, usage_nano_cores
 
     def scrape_node_metrics(self, node):
         """Scrapes information from nodes to create the metric to be exported
@@ -119,9 +133,10 @@ class KubeletCollector():
             node_info = self.get_node_info(node_name)
             if node_info is not None and 'pods' in node_info:
                 for pod in node_info['pods']:
-                    name, namespace, used_bytes = self.get_pod_metrics(pod)
+                    name, namespace, used_bytes, usage_nano_cores = self.get_pod_metrics(pod)
                     labels=[node_name,namespace,name]
-                    self.metric.add_metric(labels, used_bytes)
+                    self.ephemeral_storage_metric.add_metric(labels, used_bytes)
+                    self.cpu_usage_metric.add_metric(labels, usage_nano_cores)
             else:
                 logger.warning(f"Failed to fetch info from {node_name}")
         else:
